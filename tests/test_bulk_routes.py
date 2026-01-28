@@ -18,10 +18,9 @@ async def test_bulk_upload_success(mock_activate, mock_create, client):
 
     data = response.json()
 
-    assert response.status_code == 201
+    assert response.status_code == 202
     assert data["success"] is True
-    assert data["data"]["processed"] == 1
-    assert data["data"]["failed"] == 0
+    assert data["data"]["batch_id"] is not None
     mock_activate.assert_called_once()
 
 

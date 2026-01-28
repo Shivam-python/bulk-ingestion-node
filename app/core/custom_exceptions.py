@@ -25,7 +25,7 @@ class FileTooLargeError(AppException):
 class CSVValidationException(AppException):
     def __init__(self, errors):
         super().__init__(
-            message="CSV validation failed",
+            message=errors,
             status_code=422,
-            errors=errors
+            errors=[errors]
         )

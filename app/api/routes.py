@@ -3,7 +3,7 @@ import uuid
 
 from fastapi import APIRouter, UploadFile, File, BackgroundTasks
 
-from app.core.custom_exceptions import FileTypeNotAllowed, AppException
+from app.core.custom_exceptions import FileTypeNotAllowed, AppException, CSVValidationException
 from app.services.background_tasks import run_bulk_process
 from app.services.bulk_service import BulkService
 from app.utils.csv_parser import parse_csv
@@ -63,21 +63,28 @@ def get_status(batch_id: str):
 
 @router.post("/hospitals/bulk/validate")
 async def validate_bulk_csv(file: UploadFile = File(...)):
-    if file.content_type != "text/csv":
-        raise FileTypeNotAllowed()
+    try:
+        if file.content_type != "text/csv":
+            raise FileTypeNotAllowed()
 
-    content = await read_limited_file(file)
-    result = validate_csv(content)
+        content = await read_limited_file(file)
+        result = validate_csv(content)
 
-    if result["valid"]:
-        return ResponseBuilder.success_response(
-            message="CSV validated successfully",
-            data=result,
-        )
-    else:
+        if result["valid"]:
+            return ResponseBuilder.success_response(
+                message="CSV validated successfully",
+                data=result,
+            )
+        else:
+            return ResponseBuilder.error_response(
+                message="CSV validation failed",
+                errors=result["errors"],
+                status_code=422,
+            )
+    except CSVValidationException as e:
         return ResponseBuilder.error_response(
             message="CSV validation failed",
-            errors=result["errors"],
+            errors=[str(e)],
             status_code=422,
         )
 

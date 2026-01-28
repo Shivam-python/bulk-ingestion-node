@@ -1,4 +1,4 @@
-from app.utils.csv_validator import validate_csv, CSVValidationError
+from app.utils.csv_validator import validate_csv, CSVValidationException
 
 
 def test_valid_csv():
@@ -12,7 +12,7 @@ def test_missing_required_header():
     content = "name,phone\nHospital A,123"
     try:
         validate_csv(content)
-    except CSVValidationError as e:
+    except CSVValidationException as e:
         assert "Missing required headers" in str(e)
 
 
@@ -22,7 +22,7 @@ def test_exceed_row_limit():
 
     try:
         validate_csv(content)
-    except CSVValidationError as e:
+    except CSVValidationException as e:
         assert "Maximum 20 hospitals" in str(e)
 
 
@@ -30,4 +30,4 @@ def test_duplicate_hospital_detection():
     content = "name,address,phone\nA,Addr,123\nA,Addr,456"
     result = validate_csv(content)
     assert result["valid"] is False
-    assert "Duplicate hospital entry" in result["errors"][0]
+    assert "Duplicate hospital entry" in str(result["errors"])
