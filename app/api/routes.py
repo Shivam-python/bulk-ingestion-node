@@ -1,5 +1,10 @@
-# app/api/routes.py
+import asyncio
+import uuid
+
 from fastapi import APIRouter, UploadFile, File, BackgroundTasks
+
+from app.core.custom_exceptions import FileTypeNotAllowed, AppException
+from app.services.background_tasks import run_bulk_process
 from app.services.bulk_service import BulkService
 from app.utils.csv_parser import parse_csv
 from app.core.state import BATCH_STORE
@@ -13,36 +18,30 @@ service = BulkService()
 
 @router.post("/hospitals/bulk")
 async def bulk_upload(file: UploadFile = File(...)):
-    try:
-        if file.content_type != "text/csv":
-            return ResponseBuilder.error_response(
-                message="Only CSV files are allowed",
-                status_code=415
-            )
+    if file.content_type != "text/csv":
+        raise FileTypeNotAllowed()
 
-        content = await read_limited_file(file)
-        hospitals = parse_csv(content)
+    content = await read_limited_file(file)
+    hospitals = parse_csv(content)
 
-        batch_id = await service.process_bulk(hospitals)
-        batch_data = BATCH_STORE.get(batch_id)
+    batch_id = str(uuid.uuid4())
 
-        return ResponseBuilder.success_response(
-            message="Bulk hospital processing completed",
-            data=batch_data,
-            status_code=201
-        )
-    except FileTooLargeError as e:
-        return ResponseBuilder.error_response(
-            message="File too large",
-            errors=[str(e)],
-            status_code=413
-        )
-    except ValueError as e:
-        return ResponseBuilder.error_response(
-            message="Invalid CSV data",
-            errors=[str(e)],
-            status_code=422
-        )
+    # Initialize batch as pending
+    BATCH_STORE[batch_id] = {
+        "status": "processing",
+        "total": len(hospitals),
+        "processed": 0,
+        "failed": 0,
+        "activated": False,
+    }
+
+    asyncio.create_task(run_bulk_process(batch_id, hospitals))
+
+    return ResponseBuilder.success_response(
+        message="Bulk processing started",
+        data={"batch_id": batch_id},
+        status_code=202
+    )
 
 
 @router.get("/hospitals/bulk/{batch_id}")
@@ -64,7 +63,10 @@ def get_status(batch_id: str):
 
 @router.post("/hospitals/bulk/validate")
 async def validate_bulk_csv(file: UploadFile = File(...)):
-    content = (await file.read()).decode()
+    if file.content_type != "text/csv":
+        raise FileTypeNotAllowed()
+
+    content = await read_limited_file(file)
     result = validate_csv(content)
 
     if result["valid"]:
@@ -78,3 +80,26 @@ async def validate_bulk_csv(file: UploadFile = File(...)):
             errors=result["errors"],
             status_code=422,
         )
+
+
+@router.post("/hospitals/bulk/{batch_id}/retry")
+async def retry_failed(batch_id: str):
+    batch = BATCH_STORE.get(batch_id)
+    if not batch:
+        raise AppException("Batch not found", 404)
+
+    if not batch["failed_rows"]:
+        raise AppException("No failed hospitals to retry", 400)
+
+    hospitals_to_retry = [item["hospital"] for item in batch["failed_rows"]]
+
+    batch["failed"] = 0
+    batch["failed_rows"] = []
+
+    asyncio.create_task(run_bulk_process(batch_id, hospitals_to_retry))
+
+    return ResponseBuilder.success_response(
+        message="Retry started for failed hospitals",
+        data={"batch_id": batch_id},
+        status_code=202
+    )

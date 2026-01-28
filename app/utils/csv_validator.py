@@ -2,41 +2,39 @@ import csv
 from io import StringIO
 from typing import List, Dict
 
+from app.core.custom_exceptions import CSVValidationException
+
 REQUIRED_HEADERS = {"name", "address"}
 OPTIONAL_HEADERS = {"phone"}
 MAX_ROWS = 20
-
-
-class CSVValidationError(Exception):
-    pass
 
 
 def validate_csv(content: str) -> Dict:
     try:
         reader = csv.DictReader(StringIO(content))
     except Exception:
-        raise CSVValidationError("Invalid CSV format")
+        raise CSVValidationException("Invalid CSV format")
 
     headers = set(reader.fieldnames or [])
     expected_headers = REQUIRED_HEADERS | OPTIONAL_HEADERS
 
     if not REQUIRED_HEADERS.issubset(headers):
-        raise CSVValidationError(
+        raise CSVValidationException(
             f"Missing required headers: {REQUIRED_HEADERS - headers}"
         )
 
     if not headers.issubset(expected_headers):
-        raise CSVValidationError(
+        raise CSVValidationException(
             f"Unexpected headers: {headers - expected_headers}"
         )
 
     rows = list(reader)
 
     if len(rows) == 0:
-        raise CSVValidationError("CSV contains no hospital records")
+        raise CSVValidationException("CSV contains no hospital records")
 
     if len(rows) > MAX_ROWS:
-        raise CSVValidationError("Maximum 20 hospitals allowed per CSV")
+        raise CSVValidationException("Maximum 20 hospitals allowed per CSV")
 
     errors = []
     seen = set()
