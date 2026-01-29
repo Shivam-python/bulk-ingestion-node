@@ -1,0 +1,63 @@
+version: "3.9"
+
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: redis
+    ports:
+      - "6379:6379"
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: fastapi_api
+    env_file:
+      - .env
+    depends_on:
+      - redis
+    ports:
+      - "8000:8000"
+    volumes:
+      - .:/app
+    command: >
+      uvicorn main:app
+      --host 0.0.0.0
+      --port 8000
+      --reload
+    restart: unless-stopped
+
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: celery_worker
+    env_file:
+      - .env
+    depends_on:
+      - redis
+    volumes:
+      - .:/app
+    command: >
+      celery -A app.queue.celery_app.celery_app
+      worker --loglevel=info --concurrency=4
+    restart: unless-stopped
+
+
+  flower:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: flower_monitor
+    env_file:
+      - .env
+    depends_on:
+      - redis
+      - worker
+    command: >
+      celery -A app.queue.celery_app.celery_app
+      flower --address=0.0.0.0 --port=5555
+    ports:
+      - "5555:5555"
+    restart: unless-stopped

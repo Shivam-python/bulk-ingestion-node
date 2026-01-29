@@ -16,7 +16,7 @@ class BulkService:
         self.client = HospitalClient()
 
     async def process_bulk_with_id(self, batch_id: str, hospitals: list):
-        ACTIVE_BATCH_JOBS.inc()  # 🔥 Batch started
+        ACTIVE_BATCH_JOBS.inc()
 
         try:
             set_status(batch_id, "processing")
@@ -28,7 +28,7 @@ class BulkService:
             if batch["failed"] == 0:
                 await self.client.activate_batch(batch_id)
                 set_status(batch_id, "completed")
-                activate_batch(batch_id, True)
+                activate_batch(batch_id, "True")
             else:
                 set_status(batch_id, "failed")
 
@@ -52,8 +52,6 @@ class BulkService:
                     })
 
                     increment_processed(batch_id)
-
-                    # ✅ SUCCESS METRIC
                     HOSPITALS_PROCESSED.labels(status="success").inc()
 
                 except Exception as e:
