@@ -9,6 +9,7 @@ class Settings(BaseSettings):
     MAX_UPLOAD_SIZE: int = 51200
 
     CORS_ALLOW_ORIGINS: str = "*"  # comma-separated
+    REDIS_URL: str = "redis://localhost:6379"
 
     class Config:
         env_file = ".env"

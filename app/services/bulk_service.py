@@ -1,10 +1,12 @@
-# app/services/bulk_service.py
 import asyncio
 import logging
-import uuid
-import time
 from app.clients.hospital_client import HospitalClient
-from app.core.state import BATCH_STORE
+from app.key_store.redis_store import set_batch, get_batch, update_batch, add_success, increment_processed, add_failure, \
+    increment_failed, set_status, activate_batch, get_batch_summary
+from app.monitoring.metrics import (
+    ACTIVE_BATCH_JOBS,
+    HOSPITALS_PROCESSED,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -12,95 +14,56 @@ logger = logging.getLogger(__name__)
 class BulkService:
     def __init__(self):
         self.client = HospitalClient()
-        self.semaphore = asyncio.Semaphore(5)
-
-    async def process_bulk(self, hospitals: list):
-        batch_id = str(uuid.uuid4())
-        start = time.monotonic()
-
-        BATCH_STORE[batch_id] = {
-            "total": len(hospitals),
-            "processed_count": 0,
-            "failed_count": 0,
-            "failed_rows": [],
-            "hospitals": [],
-            "activated": False,
-            "start": start,
-        }
-
-        async def worker(row_num, hospital):
-            async with self.semaphore:
-                try:
-                    data = {
-                        **hospital,
-                        "creation_batch_id": batch_id,
-                    }
-                    res = await self.client.create_hospital(data)
-
-                    BATCH_STORE[batch_id]["hospitals"].append({
-                        "row": row_num,
-                        "hospital_id": res["id"],
-                        "name": hospital["name"],
-                        "status": "created"
-                    })
-                    BATCH_STORE[batch_id]["processed_count"] += 1
-                except Exception as e:
-                    logger.error(f"EXCEPTION WHILE CREATING HOSPITAL : {str(e)}")
-                    BATCH_STORE[batch_id]["failed_count"] += 1
-
-                    BATCH_STORE[batch_id]["failed_rows"].append({
-                        **hospital,
-                        "creation_batch_id": batch_id,
-                    })
-
-        await asyncio.gather(
-            *[worker(i + 1, h) for i, h in enumerate(hospitals)]
-        )
-
-        if BATCH_STORE[batch_id]["failed_count"] == 0:
-            await self.client.activate_batch(batch_id)
-            BATCH_STORE[batch_id]["activated"] = True
-
-        BATCH_STORE[batch_id]["time"] = round(time.monotonic() - start, 2)
-        return batch_id
 
     async def process_bulk_with_id(self, batch_id: str, hospitals: list):
-        BATCH_STORE[batch_id].update({
-            "status": "processing",
-            "failed_rows": [],
-            "hospitals": []
-        })
+        ACTIVE_BATCH_JOBS.inc()  # 🔥 Batch started
 
-        await self.process_hospitals(batch_id, hospitals)
+        try:
+            set_status(batch_id, "processing")
 
-        if BATCH_STORE[batch_id]["failed"] == 0:
-            await self.client.activate_batch(batch_id)
-            BATCH_STORE[batch_id]["activated"] = True
-            BATCH_STORE[batch_id]["status"] = "completed"
-        else:
-            BATCH_STORE[batch_id]["status"] = "failed"
+            await self.process_hospitals(batch_id, hospitals)
+
+            batch = get_batch_summary(batch_id)  # read from Redis hash
+
+            if batch["failed"] == 0:
+                await self.client.activate_batch(batch_id)
+                set_status(batch_id, "completed")
+                activate_batch(batch_id, True)
+            else:
+                set_status(batch_id, "failed")
+
+        finally:
+            ACTIVE_BATCH_JOBS.dec()
 
     async def process_hospitals(self, batch_id: str, hospitals: list):
-        async def worker(row_num, hospital):
-            async with self.semaphore:
-                try:
-                    data = {**hospital, "creation_batch_id": batch_id}
-                    res = await self.client.create_hospital(data)
+        semaphore = asyncio.Semaphore(10)
 
-                    BATCH_STORE[batch_id]["hospitals"].append({
+        async def worker(row_num, hospital):
+            async with semaphore:
+                try:
+                    payload = {**hospital, "creation_batch_id": batch_id}
+                    res = await self.client.create_hospital(payload)
+
+                    add_success(batch_id, {
                         "row": row_num,
                         "hospital_id": res["id"],
                         "name": hospital["name"],
                         "status": "created"
                     })
-                    BATCH_STORE[batch_id]["processed"] += 1
+
+                    increment_processed(batch_id)
+
+                    # ✅ SUCCESS METRIC
+                    HOSPITALS_PROCESSED.labels(status="success").inc()
 
                 except Exception as e:
-                    BATCH_STORE[batch_id]["failed"] += 1
-                    BATCH_STORE[batch_id]["failed_rows"].append({
+                    add_failure(batch_id, {
                         "row": row_num,
                         "hospital": hospital,
                         "error": str(e)
                     })
+
+                    increment_failed(batch_id)
+                    HOSPITALS_PROCESSED.labels(status="failed").inc()
 
         await asyncio.gather(*[worker(i + 1, h) for i, h in enumerate(hospitals)])

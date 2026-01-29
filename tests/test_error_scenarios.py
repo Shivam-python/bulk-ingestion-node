@@ -47,7 +47,6 @@ async def test_invalid_csv_upload(client):
         "/hospitals/bulk/validate",
         files={"file": ("bad.csv", csv_content, "text/csv")},
     )
-    print(response, end="\n\n\n")
 
     assert response.status_code == 422
     assert response.json()["success"] is False
